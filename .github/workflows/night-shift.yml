@@ -1,0 +1,76 @@
+# Turno de noche: cada madrugada un agente mejora el repo y deja un PR listo.
+#
+# Necesitas 1 secreto en Settings -> Secrets: OPENAI_API_KEY
+# Adapta los bloques marcados con  # --> ADAPTA  a tu proyecto.
+#
+# Seguridad: el agente LEE archivos del repo, asi que un archivo malicioso podria
+# intentar dirigirlo (prompt injection). Por eso esto solo corre en tu rama por
+# defecto, escribe como maximo en una rama y NUNCA mergea: tu revisas el PR.
+name: Night Shift
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC cada noche
+  workflow_dispatch: # ...o a mano desde la pestana Actions
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    env:
+      TEST_CMD: npm test # --> ADAPTA
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4 # --> ADAPTA (o setup-python, etc.)
+        with:
+          node-version: 22
+
+      - name: Instalar dependencias # --> ADAPTA
+        run: npm ci
+
+      - name: Trabajo de noche (el agente)
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ":workspace"
+          prompt: |
+            Eres un dev senior haciendo mantenimiento nocturno de ${{ github.repository }}.
+            Objetivo, en orden de prioridad:
+              1. Anade o mejora tests de codigo sin cubrir.
+              2. Refactoriza sin cambiar el comportamiento ni la API publica.
+              3. Corrige avisos del linter y errores obvios.
+            Reglas: cambios pequenos y revisables; NO toques CI, secrets ni config de
+            despliegue; NO actualices dependencias. Si no hay nada util que hacer,
+            no cambies nada y dilo.
+            Explica brevemente en tu mensaje final QUE cambiaste y POR QUE.
+
+      - name: Verificar que los tests siguen en verde
+        id: verify
+        run: |
+          if $TEST_CMD; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Descartar el trabajo si rompio los tests
+        if: steps.verify.outputs.ok == '0'
+        run: |
+          git checkout -- .
+          echo "Tests en rojo: cambio descartado, sin PR."
+
+      - name: Abrir el PR
+        if: steps.verify.outputs.ok == '1'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: night-shift
+          delete-branch: true
+          commit-message: "chore: mejoras automaticas del turno de noche"
+          title: "Night shift: mejoras automaticas"
+          body: |
+            Cambios propuestos por el agente durante la madrugada y validados con los tests.
+            Revisa, y mergea o cierra. Si no te gusta el rumbo, ajusta el `prompt` del workflow.
